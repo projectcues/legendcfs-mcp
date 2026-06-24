@@ -364,7 +364,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // Run the server
 async function run() {
-  const isHTTP = process.env.PORT || process.env.TRANSPORT === "sse";
+  // Auto-detect HTTP mode via PORT, explicit TRANSPORT, or Passenger/Production env
+  const isHTTP = 
+    process.env.PORT || 
+    process.env.TRANSPORT === "sse" || 
+    process.env.PASSENGER_APP_ENV || 
+    process.env.NODE_ENV === "production";
 
   if (!isHTTP) {
     const transport = new StdioServerTransport();
