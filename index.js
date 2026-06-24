@@ -1,10 +1,13 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { createClient } from "@supabase/supabase-js";
+import express from "express";
+import cors from "cors";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -361,9 +364,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // Run the server
 async function run() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("LegendCFS MCP Server (1.1.0) running on stdio");
+  const isHTTP = process.env.PORT || process.env.TRANSPORT === "sse";
+
+  if (!isHTTP) {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error("LegendCFS MCP Server (1.1.0) running on stdio");
+    return;
+  }
+
+  // HTTP SSE Mode
+  const app = express();
+  app.use(cors());
+
+  let sseTransport = null;
+
+  app.get("/sse", async (req, res) => {
+    console.log("New SSE connection...");
+    sseTransport = new SSEServerTransport("/message", res);
+    await server.connect(sseTransport);
+    console.log("SSE Connection established");
+  });
+
+  app.post("/message", express.json(), async (req, res) => {
+    if (sseTransport) {
+      await sseTransport.handlePostMessage(req, res);
+    } else {
+      res.status(500).send("SSE transport not initialized");
+    }
+  });
+
+  // Health check
+  app.get("/", (req, res) => res.send("LegendCFS MCP Server is running"));
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`LegendCFS MCP Server running on port ${PORT}`);
+  });
 }
 
 run().catch((error) => {
