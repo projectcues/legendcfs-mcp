@@ -391,7 +391,7 @@ async function run() {
     console.log("SSE Connection established");
   });
 
-  app.post("/message", express.json(), async (req, res) => {
+  app.post("/message", async (req, res) => {
     if (sseTransport) {
       await sseTransport.handlePostMessage(req, res);
     } else {
