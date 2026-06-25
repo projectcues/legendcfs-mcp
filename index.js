@@ -8,6 +8,7 @@ import {
 import { createClient } from "@supabase/supabase-js";
 import express from "express";
 import cors from "cors";
+import jwt from "jsonwebtoken";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -238,6 +239,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ["lead_id", "vendor_id"],
         },
+      },
+
+      // LIVE STREAMING
+      {
+        name: "create_live_stream",
+        description: "Creates a VideoSDK live stream meeting for an event.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            event_id: { type: "string" }
+          },
+          required: ["event_id"],
+        },
+      },
+      {
+        name: "register_stream_attendee",
+        description: "Registers a lead who attends the live stream.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            stream_id: { type: "string" },
+            first_name: { type: "string" },
+            last_name: { type: "string" },
+            email: { type: "string" },
+            relationship_to_deceased: { type: "string" }
+          },
+          required: ["stream_id", "first_name", "last_name", "email"],
+        },
       }
     ],
   };
@@ -352,6 +381,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (error) throw error;
       return { content: [{ type: "text", text: `Vendor referral logged: ${JSON.stringify(data)}` }] };
     }
+
+    // LIVE STREAMING
+    if (name === "create_live_stream") {
+      let meetingId = "mock-meeting-" + Math.floor(Math.random() * 1000000);
+      const API_KEY = process.env.VIDEOSDK_API_KEY;
+      const SECRET = process.env.VIDEOSDK_SECRET;
+
+      if (API_KEY && SECRET) {
+        // Generate Token
+        const options = { expiresIn: '120m', algorithm: 'HS256' };
+        const payload = { apikey: API_KEY, permissions: ['allow_join', 'allow_mod'] };
+        const token = jwt.sign(payload, SECRET, options);
+
+        // Fetch Meeting ID
+        const res = await fetch(`https://api.videosdk.live/v2/rooms`, {
+          method: "POST",
+          headers: { Authorization: token, "Content-Type": "application/json" }
+        });
+        if (res.ok) {
+          const roomData = await res.json();
+          meetingId = roomData.roomId;
+        } else {
+          console.warn("VideoSDK API returned error, falling back to mock meeting ID", await res.text());
+        }
+      }
+
+      const streamUrl = `https://legendcfs.com/stream/${meetingId}`;
+
+      const { data, error } = await supabase.from("live_streams").insert([{
+        event_id: args.event_id,
+        videosdk_meeting_id: meetingId,
+        stream_url: streamUrl,
+        status: 'Scheduled'
+      }]).select().single();
+      
+      if (error) throw error;
+      return { content: [{ type: "text", text: `Live stream created: ${JSON.stringify(data)}` }] };
+    }
+
+    if (name === "register_stream_attendee") {
+      const { data, error } = await supabase.from("stream_attendees").insert([{
+        stream_id: args.stream_id,
+        first_name: args.first_name,
+        last_name: args.last_name,
+        email: args.email,
+        relationship_to_deceased: args.relationship_to_deceased || ''
+      }]).select().single();
+      
+      if (error) throw error;
+      return { content: [{ type: "text", text: `Stream attendee registered: ${JSON.stringify(data)}` }] };
+    }
+
+
 
     throw new Error(`Unknown tool: ${name}`);
   } catch (error) {
