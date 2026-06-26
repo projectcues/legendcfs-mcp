@@ -292,15 +292,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["meeting_id"],
         },
       },
-      {
-        name: "register_videosdk_webhooks",
-        description: "Registers the global webhooks with VideoSDK to ensure the MCP server receives livestream and meeting events. Only needs to be run once.",
-        inputSchema: {
-          type: "object",
-          properties: {},
-          required: [],
-        },
-      }
+
     ],
   };
 });
@@ -505,41 +497,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text: `Stream summary fetched and logged: ${JSON.stringify(data)}` }] };
     }
 
-    if (name === "register_videosdk_webhooks") {
-      const API_KEY = process.env.VIDEOSDK_API_KEY;
-      const SECRET = process.env.VIDEOSDK_SECRET;
-      
-      if (!API_KEY || !SECRET) throw new Error("Missing VideoSDK credentials in environment.");
-      
-      const options = { expiresIn: '10m', algorithm: 'HS256' };
-      const payload = { apikey: API_KEY, permissions: ['allow_join', 'allow_mod'] };
-      const token = jwt.sign(payload, SECRET, options);
-      
-      const webhookUrl = "https://mcp.legendcfs.com/webhooks/videosdk";
-      
-      const res = await fetch("https://api.videosdk.live/v2/webhooks", {
-        method: "POST",
-        headers: { "Authorization": token, "Content-Type": "application/json" },
-        body: JSON.stringify({
-            events: [
-                "participant-joined",
-                "participant-left",
-                "session-started",
-                "session-ended",
-                "recording-started",
-                "recording-stopped",
-                "livestream-started",
-                "livestream-stopped"
-            ],
-            url: webhookUrl
-        })
-      });
-      
-      const data = await res.json();
-      if (!res.ok) throw new Error(`VideoSDK Webhook Registration failed: ${JSON.stringify(data)}`);
-      
-      return { content: [{ type: "text", text: `Successfully registered VideoSDK Webhooks to ${webhookUrl}: ${JSON.stringify(data)}` }] };
-    }
+
 
     throw new Error(`Unknown tool: ${name}`);
   } catch (error) {
