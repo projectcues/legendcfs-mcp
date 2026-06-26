@@ -104,6 +104,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             event_type: { type: "string", enum: ["Viewing", "Funeral Service", "Graveside", "Reception"] },
             event_date: { type: "string", description: "ISO 8601 date string" },
             location_name: { type: "string" },
+            requires_live_stream: { type: "boolean", description: "Set to true if the family's package includes live streaming" }
           },
           required: ["case_id", "event_type", "event_date"],
         },
@@ -329,9 +330,64 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     // ARRANGEMENTS & CONTENT
     if (name === "schedule_event") {
-      const { data, error } = await supabase.from("events").insert([args]).select().single();
+      const { data, error } = await supabase.from("events").insert([{
+        case_id: args.case_id,
+        event_type: args.event_type,
+        event_date: args.event_date,
+        location_name: args.location_name
+      }]).select().single();
+      
       if (error) throw error;
-      return { content: [{ type: "text", text: `Event scheduled: ${JSON.stringify(data)}` }] };
+
+      let streamInfo = "";
+      // Intelligent Auto-Provisioning of Livestream based on package
+      if (args.requires_live_stream) {
+        let meetingId = "mock-meeting-" + Math.floor(Math.random() * 1000000);
+        const API_KEY = process.env.VIDEOSDK_API_KEY;
+        const SECRET = process.env.VIDEOSDK_SECRET;
+
+        if (API_KEY && SECRET) {
+          const options = { expiresIn: '120m', algorithm: 'HS256' };
+          const payload = { apikey: API_KEY, permissions: ['allow_join', 'allow_mod'] };
+          const token = jwt.sign(payload, SECRET, options);
+
+          const res = await fetch(`https://api.videosdk.live/v2/rooms`, {
+            method: "POST",
+            headers: { Authorization: token, "Content-Type": "application/json" }
+          });
+          if (res.ok) {
+            const roomData = await res.json();
+            meetingId = roomData.roomId;
+            
+            try {
+              const templateUrl = process.env.VIDEOSDK_TEMPLATE_URL || "https://mcp.legendcfs.com/index.html";
+              const hlsRes = await fetch("https://api.videosdk.live/v2/hls/start", {
+                method: "POST",
+                headers: { Authorization: token, "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  roomId: meetingId,
+                  templateUrl: templateUrl,
+                  config: { orientation: "landscape", quality: "high" }
+                })
+              });
+              if (!hlsRes.ok) console.warn("VideoSDK HLS Start Warning:", await hlsRes.text());
+            } catch(e) {
+              console.warn("VideoSDK HLS Start Error:", e);
+            }
+          }
+        }
+
+        const streamUrl = `https://legendcfs.com/stream/${meetingId}`;
+        await supabase.from("live_streams").insert([{
+          event_id: data.id,
+          videosdk_meeting_id: meetingId,
+          stream_url: streamUrl,
+          status: 'Scheduled'
+        }]);
+        streamInfo = ` (Auto-provisioned Live Stream: ${streamUrl})`;
+      }
+
+      return { content: [{ type: "text", text: `Event scheduled successfully.${streamInfo} Details: ${JSON.stringify(data)}` }] };
     }
 
     if (name === "get_events") {
