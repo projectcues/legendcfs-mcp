@@ -427,6 +427,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (res.ok) {
           const roomData = await res.json();
           meetingId = roomData.roomId;
+          
+          // Auto-start HLS Broadcast with Custom Template
+          try {
+            const templateUrl = process.env.VIDEOSDK_TEMPLATE_URL || "https://template.legendcfs.com";
+            const hlsRes = await fetch("https://api.videosdk.live/v2/hls/start", {
+              method: "POST",
+              headers: { Authorization: token, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                roomId: meetingId,
+                templateUrl: templateUrl,
+                config: {
+                  orientation: "landscape",
+                  quality: "high"
+                }
+              })
+            });
+            if (!hlsRes.ok) {
+               console.warn("VideoSDK HLS Start Warning:", await hlsRes.text());
+            }
+          } catch(e) {
+            console.warn("VideoSDK HLS Start Error:", e);
+          }
+          
         } else {
           console.warn("VideoSDK API returned error, falling back to mock meeting ID", await res.text());
         }
