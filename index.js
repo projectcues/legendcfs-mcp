@@ -430,7 +430,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           
           // Auto-start HLS Broadcast with Custom Template
           try {
-            const templateUrl = process.env.VIDEOSDK_TEMPLATE_URL || "https://template.legendcfs.com";
+            const templateUrl = process.env.VIDEOSDK_TEMPLATE_URL || "https://mcp.legendcfs.com/index.html";
             const hlsRes = await fetch("https://api.videosdk.live/v2/hls/start", {
               method: "POST",
               headers: { Authorization: token, "Content-Type": "application/json" },
@@ -550,6 +550,7 @@ async function run() {
   // HTTP SSE Mode
   const app = express();
   app.use(cors());
+  app.use(express.static("public"));
 
   let sseTransport = null;
 

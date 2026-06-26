@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Legend CFS Livestream AI Overlay</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- VideoSDK script -->
+    <script src="https://sdk.videosdk.live/js-sdk/0.0.83/videosdk.js"></script>
+</head>
+<body>
+    
+    <!-- This container holds all participant videos dynamically -->
+    <div id="videoContainer" class="video-container"></div>
+
+    <!-- The Lower Third Overlay for AI Insights -->
+    <div id="aiOverlay" class="glass-overlay hidden">
+        <div class="glow-edge"></div>
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <span class="pulse-dot"></span>
+                <span>Copilot Insight</span>
+            </div>
+            <div id="aiMessage" class="overlay-text">
+                Waiting for insights...
+            </div>
+        </div>
+    </div>
+
+    <!-- The main logic script -->
+    <script src="app.js"></script>
+</body>
+</html>
