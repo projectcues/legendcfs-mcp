@@ -52,6 +52,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             phone: { type: "string" },
             relationship_to_deceased: { type: "string" },
             source: { type: "string" },
+            case_id: { type: "string", description: "Attribution to specific case" },
+            event_id: { type: "string", description: "Attribution to specific event" },
+            obituary_id: { type: "string", description: "Attribution to specific obituary" },
           },
           required: ["first_name", "last_name", "source"],
         },
@@ -264,7 +267,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             first_name: { type: "string" },
             last_name: { type: "string" },
             email: { type: "string" },
-            relationship_to_deceased: { type: "string" }
+            relationship_to_deceased: { type: "string" },
+            case_id: { type: "string" },
+            event_id: { type: "string" },
           },
           required: ["stream_id", "first_name", "last_name", "email"],
         },
@@ -305,9 +310,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     // INTAKE & LOGISTICS
     if (name === "create_lead") {
-      const { data, error } = await supabase.from("leads").insert([args]).select().single();
+      const dbArgs = {
+        lead_name: `${args.first_name} ${args.last_name}`,
+        lead_phone: args.phone,
+        lead_email: args.email,
+        relationship: args.relationship_to_deceased,
+        source: args.source,
+        case_id: args.case_id,
+        event_id: args.event_id,
+        obituary_id: args.obituary_id
+      };
+      const { data, error } = await supabase.from("leads").insert([dbArgs]).select().single();
       if (error) throw error;
       return { content: [{ type: "text", text: `Lead created: ${JSON.stringify(data)}` }] };
+    }
+
+    if (name === "register_stream_attendee") {
+      const dbArgs = {
+        lead_name: `${args.first_name} ${args.last_name}`,
+        lead_email: args.email,
+        relationship: args.relationship_to_deceased,
+        source: `Live Stream: ${args.stream_id}`,
+        case_id: args.case_id,
+        event_id: args.event_id
+      };
+      const { data, error } = await supabase.from("leads").insert([dbArgs]).select().single();
+      if (error) throw error;
+      return { content: [{ type: "text", text: `Stream attendee registered as lead: ${JSON.stringify(data)}` }] };
     }
 
     if (name === "create_case") {
@@ -524,18 +553,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text: `Live stream created: ${JSON.stringify(data)}` }] };
     }
 
-    if (name === "register_stream_attendee") {
-      const { data, error } = await supabase.from("stream_attendees").insert([{
-        stream_id: args.stream_id,
-        first_name: args.first_name,
-        last_name: args.last_name,
-        email: args.email,
-        relationship_to_deceased: args.relationship_to_deceased || ''
-      }]).select().single();
-      
-      if (error) throw error;
-      return { content: [{ type: "text", text: `Stream attendee registered: ${JSON.stringify(data)}` }] };
-    }
+
 
     if (name === "send_pubsub_message") {
       const API_KEY = process.env.VIDEOSDK_API_KEY;
