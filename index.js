@@ -10,6 +10,7 @@ import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import * as dotenv from "dotenv";
+import nodemailer from "nodemailer";
 
 dotenv.config();
 
@@ -384,6 +385,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
 
+      {
+        name: "query_whitepages",
+        description: "Queries the Whitepages Person API for deep background info and cleans the payload to save tokens.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            city: { type: "string" },
+            state: { type: "string" },
+            postal_code: { type: "string" }
+          },
+          required: ["name"],
+        },
+      },
+      {
+        name: "send_email",
+        description: "Sends an email to staff or clients. Use this to notify humans or request approvals.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            to: { type: "string" },
+            subject: { type: "string" },
+            body: { type: "string" }
+          },
+          required: ["to", "subject", "body"],
+        },
+      },
     ],
   };
 });
@@ -769,6 +797,54 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text: `Stream summary fetched and logged: ${JSON.stringify(data)}` }] };
     }
 
+    if (name === "query_whitepages") {
+      const whitepagesApiKey = process.env.WHITEPAGES_API_KEY;
+      if (!whitepagesApiKey) throw new Error("Missing WHITEPAGES_API_KEY");
+      
+      const params = new URLSearchParams({ api_key: whitepagesApiKey, name: args.name });
+      if (args.city) params.append('city', args.city);
+      if (args.state) params.append('state_code', args.state);
+      if (args.postal_code) params.append('postal_code', args.postal_code);
+      
+      const wpResponse = await fetch(`https://proapi.whitepages.com/3.0/person.json?${params.toString()}`);
+      const wpData = await wpResponse.json();
+      
+      const cleanedMatches = [];
+      if (wpData.person && Array.isArray(wpData.person)) {
+        for (const person of wpData.person) {
+          cleanedMatches.push({
+            id: person.id,
+            name: person.name,
+            age_range: person.age_range,
+            associated_people: (person.associated_people || []).map(p => p.name).slice(0, 10),
+            current_addresses: (person.current_addresses || []).map(a => `${a.street_line_1}, ${a.city}, ${a.state_code} ${a.postal_code}`),
+            historical_addresses: (person.historical_addresses || []).map(a => `${a.street_line_1}, ${a.city}, ${a.state_code} ${a.postal_code}`).slice(0, 5),
+            phones: (person.phones || []).map(p => ({ number: p.phone_number, line_type: p.line_type, is_valid: p.is_valid })),
+            emails: (person.associated_emails || [])
+          });
+        }
+      }
+      return { content: [{ type: "text", text: JSON.stringify(cleanedMatches) }] };
+    }
+
+    if (name === "send_email") {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST || "smtp.resend.com",
+        port: parseInt(process.env.SMTP_PORT || "465"),
+        secure: true, // Use TLS
+        auth: {
+          user: process.env.SMTP_USER || "resend",
+          pass: process.env.SMTP_PASS
+        }
+      });
+      const info = await transporter.sendMail({
+        from: process.env.EMAIL_FROM || "crm@legendcfs.com",
+        to: args.to,
+        subject: args.subject,
+        text: args.body
+      });
+      return { content: [{ type: "text", text: `Email sent successfully: ${info.messageId}` }] };
+    }
 
 
     throw new Error(`Unknown tool: ${name}`);
