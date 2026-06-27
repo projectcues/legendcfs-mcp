@@ -60,20 +60,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: "enrich_lead",
-        description: "Enrich a lead using PeopleDataLabs to find phone numbers and emails based on name and location.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            lead_id: { type: "string" },
-            first_name: { type: "string" },
-            last_name: { type: "string" },
-            location: { type: "string", description: "City or State to narrow the search" }
-          },
-          required: ["lead_id", "first_name", "last_name"],
-        },
-      },
-      {
         name: "link_leads",
         description: "Links two leads together in the relationship graph.",
         inputSchema: {
@@ -387,54 +373,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { data, error } = await supabase.from("leads").insert([dbArgs]).select().single();
       if (error) throw error;
       return { content: [{ type: "text", text: `Lead created: ${JSON.stringify(data)}` }] };
-    }
-
-    if (name === "enrich_lead") {
-      const pdlApiKey = process.env.PDL_API_KEY;
-      if (!pdlApiKey) {
-        throw new Error("Missing PDL_API_KEY in environment variables.");
-      }
-
-      let sqlQuery = `SELECT * FROM person WHERE first_name='${args.first_name.replace(/'/g, "''")}' AND last_name='${args.last_name.replace(/'/g, "''")}'`;
-      if (args.location) {
-        sqlQuery += ` AND location_region='${args.location.replace(/'/g, "''")}'`;
-      }
-      
-      const params = new URLSearchParams({
-          sql: sqlQuery,
-          size: "1"
-      });
-
-      const response = await fetch(`https://api.peopledatalabs.com/v5/person/search?${params.toString()}`, {
-          headers: { 'X-Api-Key': pdlApiKey }
-      });
-      
-      const pdlData = await response.json();
-      
-      if (response.ok && pdlData.data && pdlData.data.length > 0) {
-          const person = pdlData.data[0];
-          
-          let email = null;
-          if (person.emails && person.emails.length > 0) {
-              email = person.emails[0].address;
-          }
-          
-          let phone = null;
-          if (person.phone_numbers && person.phone_numbers.length > 0) {
-              phone = person.phone_numbers[0].number;
-          }
-
-          const updates = { enrichment_data: person };
-          if (email) updates.lead_email = email;
-          if (phone) updates.lead_phone = phone;
-
-          const { data: leadData, error } = await supabase.from("leads").update(updates).eq("id", args.lead_id).select().single();
-          if (error) throw error;
-          
-          return { content: [{ type: "text", text: `Lead enriched successfully! Found ${email ? email : 'no email'} and ${phone ? phone : 'no phone'}.` }] };
-      } else {
-          return { content: [{ type: "text", text: `No PDL match found for ${args.first_name} ${args.last_name} in ${args.location}.` }] };
-      }
     }
 
     if (name === "link_leads") {
