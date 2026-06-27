@@ -801,20 +801,28 @@ async function run() {
   app.use(cors());
   app.use(express.static("public"));
 
-  let sseTransport = null;
+  const transports = new Map();
 
   app.get("/sse", async (req, res) => {
     console.log("New SSE connection...");
-    sseTransport = new SSEServerTransport("/message", res);
-    await server.connect(sseTransport);
-    console.log("SSE Connection established");
+    const transport = new SSEServerTransport("/message", res);
+    transports.set(transport.sessionId, transport);
+    await server.connect(transport);
+    console.log("SSE Connection established, session:", transport.sessionId);
+    
+    req.on("close", () => {
+      console.log("SSE Connection closed:", transport.sessionId);
+      transports.delete(transport.sessionId);
+    });
   });
 
   app.post("/message", async (req, res) => {
-    if (sseTransport) {
-      await sseTransport.handlePostMessage(req, res);
+    const sessionId = req.query.sessionId;
+    const transport = transports.get(sessionId);
+    if (transport) {
+      await transport.handlePostMessage(req, res);
     } else {
-      res.status(500).send("SSE transport not initialized");
+      res.status(404).send("Session not found");
     }
   });
 
