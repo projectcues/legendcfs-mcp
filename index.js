@@ -74,6 +74,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "link_leads",
+        description: "Links two leads together in the relationship graph.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            lead_id_1: { type: "string" },
+            lead_id_2: { type: "string" },
+            relationship_type: { type: "string", description: "e.g., 'Sibling', 'Spouse', 'Cousin'" },
+            confidence_score: { type: "number", description: "0-100 score of how confident you are in this match" }
+          },
+          required: ["lead_id_1", "lead_id_2", "relationship_type"],
+        },
+      },
+      {
+        name: "get_lead_network",
+        description: "Retrieves the full web of relationships for a specific lead.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            lead_id: { type: "string" }
+          },
+          required: ["lead_id"],
+        },
+      },
+      {
         name: "update_lead_info",
         description: "Updates a lead's contact information (e.g. from an email signature) and status.",
         inputSchema: {
@@ -410,6 +435,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       } else {
           return { content: [{ type: "text", text: `No PDL match found for ${args.first_name} ${args.last_name} in ${args.location}.` }] };
       }
+    }
+
+    if (name === "link_leads") {
+      const { data, error } = await supabase.from("lead_relationships").insert({
+        lead_id_1: args.lead_id_1,
+        lead_id_2: args.lead_id_2,
+        relationship_type: args.relationship_type,
+        confidence_score: args.confidence_score || 100.0
+      }).select();
+      
+      if (error) throw error;
+      return { content: [{ type: "text", text: `Leads linked successfully: ${JSON.stringify(data)}` }] };
+    }
+
+    if (name === "get_lead_network") {
+      // Query relationships where the lead is either lead_id_1 or lead_id_2
+      const { data: rels1, error: err1 } = await supabase.from("lead_relationships").select("*, lead_id_2(id, lead_name, lead_phone, lead_email)").eq("lead_id_1", args.lead_id);
+      const { data: rels2, error: err2 } = await supabase.from("lead_relationships").select("*, lead_id_1(id, lead_name, lead_phone, lead_email)").eq("lead_id_2", args.lead_id);
+      
+      if (err1 || err2) throw (err1 || err2);
+      
+      const network = [...(rels1 || []), ...(rels2 || [])];
+      return { content: [{ type: "text", text: JSON.stringify(network, null, 2) }] };
     }
 
     if (name === "update_lead_info") {
