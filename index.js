@@ -94,7 +94,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             lead_phone: { type: "string" },
             lead_email: { type: "string" },
             status: { type: "string" },
-            follow_up_status: { type: "string" }
+            follow_up_status: { type: "string" },
+            phone_history: { type: "array" },
+            address_history: { type: "array" }
           },
           required: ["lead_id"],
         },
@@ -405,6 +407,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (args.status) updates.status = args.status;
       if (args.follow_up_status) updates.follow_up_status = args.follow_up_status;
       updates.updated_at = new Date().toISOString();
+
+      if (args.phone_history || args.address_history) {
+        const { data: currentLead, error: fetchError } = await supabase.from("leads").select("phone_history, address_history").eq("id", args.lead_id).single();
+        if (!fetchError && currentLead) {
+          if (args.phone_history) {
+            const currentPhones = Array.isArray(currentLead.phone_history) ? currentLead.phone_history : [];
+            updates.phone_history = [...currentPhones, ...args.phone_history];
+          }
+          if (args.address_history) {
+            const currentAddresses = Array.isArray(currentLead.address_history) ? currentLead.address_history : [];
+            updates.address_history = [...currentAddresses, ...args.address_history];
+          }
+        }
+      }
 
       const { data, error } = await supabase.from("leads").update(updates).eq("id", args.lead_id).select().single();
       if (error) throw error;
