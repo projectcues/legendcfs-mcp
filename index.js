@@ -102,6 +102,39 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "update_lead_status",
+        description: "Updates a lead's status and contact information (phone, email, address).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            lead_id: { type: "string" },
+            lead_phone: { type: "string" },
+            lead_email: { type: "string" },
+            address_line_1: { type: "string" },
+            city: { type: "string" },
+            state: { type: "string" },
+            zip_code: { type: "string" },
+            status: { type: "string" },
+            follow_up_status: { type: "string" }
+          },
+          required: ["lead_id"],
+        },
+      },
+      {
+        name: "update_agent_profile",
+        description: "Updates a human agent's profile in the CRM.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            agent_email: { type: "string" },
+            agent_phone: { type: "string" },
+            agent_name: { type: "string" },
+            business_website: { type: "string" }
+          },
+          required: ["agent_email"],
+        },
+      },
+      {
         name: "get_available_leads",
         description: "Retrieves a batch of new, uncontacted leads that are not yet assigned to an agent.",
         inputSchema: {
@@ -425,6 +458,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { data, error } = await supabase.from("leads").update(updates).eq("id", args.lead_id).select().single();
       if (error) throw error;
       return { content: [{ type: "text", text: `Lead updated: ${JSON.stringify(data)}` }] };
+    }
+
+    if (name === "update_lead_status") {
+      const updates = {};
+      if (args.lead_phone) updates.lead_phone = args.lead_phone;
+      if (args.lead_email) updates.lead_email = args.lead_email;
+      if (args.address_line_1) updates.address_line_1 = args.address_line_1;
+      if (args.city) updates.city = args.city;
+      if (args.state) updates.state = args.state;
+      if (args.zip_code) updates.zip_code = args.zip_code;
+      if (args.status) updates.status = args.status;
+      if (args.follow_up_status) updates.follow_up_status = args.follow_up_status;
+      updates.updated_at = new Date().toISOString();
+
+      const { data, error } = await supabase.from("leads").update(updates).eq("id", args.lead_id).select().single();
+      if (error) throw error;
+      return { content: [{ type: "text", text: `Lead status updated: ${JSON.stringify(data)}` }] };
+    }
+
+    if (name === "update_agent_profile") {
+      const updates = {};
+      if (args.agent_phone) updates.agent_phone = args.agent_phone;
+      if (args.agent_name) updates.agent_name = args.agent_name;
+      if (args.business_website) updates.business_website = args.business_website;
+      
+      const { data, error } = await supabase.from("agents").update(updates).eq("agent_email", args.agent_email).select().single();
+      if (error) throw error;
+      return { content: [{ type: "text", text: `Agent profile updated: ${JSON.stringify(data)}` }] };
     }
 
     if (name === "get_available_leads") {
