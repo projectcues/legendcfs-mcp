@@ -60,6 +60,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "update_lead_info",
+        description: "Updates a lead's contact information (e.g. from an email signature) and status.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            lead_id: { type: "string" },
+            lead_phone: { type: "string" },
+            lead_email: { type: "string" },
+            status: { type: "string" },
+            follow_up_status: { type: "string" }
+          },
+          required: ["lead_id"],
+        },
+      },
+      {
+        name: "get_available_leads",
+        description: "Retrieves a batch of new, uncontacted leads that are not yet assigned to an agent.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            limit: { type: "number", description: "Maximum number of leads to fetch (defaults to 5)" }
+          }
+        },
+      },
+      {
         name: "create_case",
         description: "Converts a lead into an active case (logistics tracking for a deceased individual).",
         inputSchema: {
@@ -323,6 +348,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { data, error } = await supabase.from("leads").insert([dbArgs]).select().single();
       if (error) throw error;
       return { content: [{ type: "text", text: `Lead created: ${JSON.stringify(data)}` }] };
+    }
+
+    if (name === "update_lead_info") {
+      const updates = {};
+      if (args.lead_phone) updates.lead_phone = args.lead_phone;
+      if (args.lead_email) updates.lead_email = args.lead_email;
+      if (args.status) updates.status = args.status;
+      if (args.follow_up_status) updates.follow_up_status = args.follow_up_status;
+      updates.updated_at = new Date().toISOString();
+
+      const { data, error } = await supabase.from("leads").update(updates).eq("id", args.lead_id).select().single();
+      if (error) throw error;
+      return { content: [{ type: "text", text: `Lead updated: ${JSON.stringify(data)}` }] };
+    }
+
+    if (name === "get_available_leads") {
+      const limit = args.limit || 5;
+      const { data, error } = await supabase.from("leads")
+        .select("*")
+        .is("agent_id", null)
+        .eq("status", "Uncontacted")
+        .limit(limit);
+      
+      if (error) throw error;
+      return { content: [{ type: "text", text: `Available unassigned leads: ${JSON.stringify(data)}` }] };
     }
 
     if (name === "register_stream_attendee") {
