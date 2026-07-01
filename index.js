@@ -10,12 +10,12 @@ import express from "express";
 import cors from "cors";
 import jwt from "jsonwebtoken";
 import * as dotenv from "dotenv";
-import nodemailer from "nodemailer";
 
 dotenv.config();
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const MCP_AUTH_TOKEN = process.env.MCP_AUTH_TOKEN;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in env");
@@ -24,10 +24,47 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+// --- Shared Helpers ---
+function getVideoSDKToken() {
+  const API_KEY = process.env.VIDEOSDK_API_KEY;
+  const SECRET = process.env.VIDEOSDK_SECRET;
+  if (!API_KEY || !SECRET) return null;
+  const options = { expiresIn: '120m', algorithm: 'HS256' };
+  const payload = { apikey: API_KEY, permissions: ['allow_join', 'allow_mod'] };
+  return jwt.sign(payload, SECRET, options);
+}
+
+async function createVideoSDKRoom(token) {
+  const res = await fetch('https://api.videosdk.live/v2/rooms', {
+    method: 'POST',
+    headers: { Authorization: token, 'Content-Type': 'application/json' }
+  });
+  if (!res.ok) {
+    console.warn('VideoSDK API returned error, falling back to mock:', await res.text());
+    return null;
+  }
+  const roomData = await res.json();
+  return roomData.roomId;
+}
+
+async function startVideoSDKHLS(token, meetingId) {
+  try {
+    const templateUrl = process.env.VIDEOSDK_TEMPLATE_URL || 'https://mcp.legendcfs.com/index.html';
+    const hlsRes = await fetch('https://api.videosdk.live/v2/hls/start', {
+      method: 'POST',
+      headers: { Authorization: token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId: meetingId, templateUrl, config: { orientation: 'landscape', quality: 'high' } })
+    });
+    if (!hlsRes.ok) console.warn('VideoSDK HLS Start Warning:', await hlsRes.text());
+  } catch (e) {
+    console.warn('VideoSDK HLS Start Error:', e);
+  }
+}
+
 const server = new Server(
   {
     name: "legendcfs-mcp",
-    version: "1.1.0",
+    version: "2.0.0",
   },
   {
     capabilities: {
@@ -86,25 +123,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: "update_lead_info",
-        description: "Updates a lead's contact information (e.g. from an email signature) and status.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            lead_id: { type: "string" },
-            lead_phone: { type: "string" },
-            lead_email: { type: "string" },
-            status: { type: "string" },
-            follow_up_status: { type: "string" },
-            phone_history: { type: "array" },
-            address_history: { type: "array" }
-          },
-          required: ["lead_id"],
-        },
-      },
-      {
-        name: "update_lead_status",
-        description: "Updates a lead's status and contact information (phone, email, address).",
+        name: "update_lead",
+        description: "Updates a lead's contact info, status, address, and/or history. Use this single tool for all lead updates.",
         inputSchema: {
           type: "object",
           properties: {
@@ -116,7 +136,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             state: { type: "string" },
             zip_code: { type: "string" },
             status: { type: "string" },
-            follow_up_status: { type: "string" }
+            follow_up_status: { type: "string" },
+            phone_history: { type: "array", description: "New phone entries to append to history" },
+            address_history: { type: "array", description: "New address entries to append to history" }
           },
           required: ["lead_id"],
         },
@@ -374,18 +396,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: "fetch_stream_summary",
-        description: "Fetches the post-meeting transcription summary for a VideoSDK stream and logs it to the CRM.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            meeting_id: { type: "string" }
-          },
-          required: ["meeting_id"],
-        },
-      },
-
-      {
         name: "query_whitepages",
         description: "Queries the Whitepages Person API for deep background info and cleans the payload to save tokens.",
         inputSchema: {
@@ -397,19 +407,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             postal_code: { type: "string" }
           },
           required: ["name"],
-        },
-      },
-      {
-        name: "send_email",
-        description: "Sends an email to staff or clients. Use this to notify humans or request approvals.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            to: { type: "string" },
-            subject: { type: "string" },
-            body: { type: "string" }
-          },
-          required: ["to", "subject", "body"],
         },
       },
     ],
@@ -461,14 +458,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text: JSON.stringify(network, null, 2) }] };
     }
 
-    if (name === "update_lead_info") {
+    if (name === "update_lead") {
       const updates = {};
       if (args.lead_phone) updates.lead_phone = args.lead_phone;
       if (args.lead_email) updates.lead_email = args.lead_email;
+      if (args.address_line_1) updates.address_line_1 = args.address_line_1;
+      if (args.city) updates.city = args.city;
+      if (args.state) updates.state = args.state;
+      if (args.zip_code) updates.zip_code = args.zip_code;
       if (args.status) updates.status = args.status;
       if (args.follow_up_status) updates.follow_up_status = args.follow_up_status;
       updates.updated_at = new Date().toISOString();
 
+      // Append to history arrays if provided
       if (args.phone_history || args.address_history) {
         const { data: currentLead, error: fetchError } = await supabase.from("leads").select("phone_history, address_history").eq("id", args.lead_id).single();
         if (!fetchError && currentLead) {
@@ -486,23 +488,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { data, error } = await supabase.from("leads").update(updates).eq("id", args.lead_id).select().single();
       if (error) throw error;
       return { content: [{ type: "text", text: `Lead updated: ${JSON.stringify(data)}` }] };
-    }
-
-    if (name === "update_lead_status") {
-      const updates = {};
-      if (args.lead_phone) updates.lead_phone = args.lead_phone;
-      if (args.lead_email) updates.lead_email = args.lead_email;
-      if (args.address_line_1) updates.address_line_1 = args.address_line_1;
-      if (args.city) updates.city = args.city;
-      if (args.state) updates.state = args.state;
-      if (args.zip_code) updates.zip_code = args.zip_code;
-      if (args.status) updates.status = args.status;
-      if (args.follow_up_status) updates.follow_up_status = args.follow_up_status;
-      updates.updated_at = new Date().toISOString();
-
-      const { data, error } = await supabase.from("leads").update(updates).eq("id", args.lead_id).select().single();
-      if (error) throw error;
-      return { content: [{ type: "text", text: `Lead status updated: ${JSON.stringify(data)}` }] };
     }
 
     if (name === "update_agent_profile") {
@@ -543,7 +528,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "create_case") {
-      const { data, error } = await supabase.from("cases").insert([args]).select().single();
+      const dbArgs = { lead_id: args.lead_id, status: args.status };
+      if (args.location_of_deceased) dbArgs.location_of_deceased = args.location_of_deceased;
+      const { data, error } = await supabase.from("cases").insert([dbArgs]).select().single();
       if (error) throw error;
       return { content: [{ type: "text", text: `Case created: ${JSON.stringify(data)}` }] };
     }
@@ -575,40 +562,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Intelligent Auto-Provisioning of Livestream based on package
       if (args.requires_live_stream) {
         let meetingId = "mock-meeting-" + Math.floor(Math.random() * 1000000);
-        const API_KEY = process.env.VIDEOSDK_API_KEY;
-        const SECRET = process.env.VIDEOSDK_SECRET;
-
-        if (API_KEY && SECRET) {
-          const options = { expiresIn: '120m', algorithm: 'HS256' };
-          const payload = { apikey: API_KEY, permissions: ['allow_join', 'allow_mod'] };
-          const token = jwt.sign(payload, SECRET, options);
-
-          const res = await fetch(`https://api.videosdk.live/v2/rooms`, {
-            method: "POST",
-            headers: { Authorization: token, "Content-Type": "application/json" }
-          });
-          if (res.ok) {
-            const roomData = await res.json();
-            meetingId = roomData.roomId;
-            
-            try {
-              const templateUrl = process.env.VIDEOSDK_TEMPLATE_URL || "https://mcp.legendcfs.com/index.html";
-              const hlsRes = await fetch("https://api.videosdk.live/v2/hls/start", {
-                method: "POST",
-                headers: { Authorization: token, "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  roomId: meetingId,
-                  templateUrl: templateUrl,
-                  config: { orientation: "landscape", quality: "high" }
-                })
-              });
-              if (!hlsRes.ok) console.warn("VideoSDK HLS Start Warning:", await hlsRes.text());
-            } catch(e) {
-              console.warn("VideoSDK HLS Start Error:", e);
-            }
+        const token = getVideoSDKToken();
+        if (token) {
+          const roomId = await createVideoSDKRoom(token);
+          if (roomId) {
+            meetingId = roomId;
+            await startVideoSDKHLS(token, meetingId);
           }
         }
-
         const streamUrl = `https://legendcfs.com/stream/${meetingId}`;
         await supabase.from("live_streams").insert([{
           event_id: data.id,
@@ -629,7 +590,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "add_merchandise") {
-      const { data, error } = await supabase.from("merchandise").insert([args]).select().single();
+      const dbArgs = { case_id: args.case_id, item_type: args.item_type, item_name: args.item_name, price: args.price };
+      if (args.quantity) dbArgs.quantity = args.quantity;
+      const { data, error } = await supabase.from("merchandise").insert([dbArgs]).select().single();
       if (error) throw error;
       return { content: [{ type: "text", text: `Merchandise added: ${JSON.stringify(data)}` }] };
     }
@@ -641,7 +604,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "extract_family_tree") {
-      const { data, error } = await supabase.from("family_members").insert([args]).select().single();
+      const dbArgs = {
+        lead_id: args.lead_id,
+        first_name: args.first_name,
+        last_name: args.last_name,
+        relationship_to_deceased: args.relationship_to_deceased
+      };
+      const { data, error } = await supabase.from("family_members").insert([dbArgs]).select().single();
       if (error) throw error;
       return { content: [{ type: "text", text: `Family member logged: ${JSON.stringify(data)}` }] };
     }
@@ -668,7 +637,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "verify_insurance_policy") {
-      const { data, error } = await supabase.from("insurance_policies").insert([args]).select().single();
+      const dbArgs = { lead_id: args.lead_id, carrier_name: args.carrier_name, status: args.status };
+      if (args.policy_number) dbArgs.policy_number = args.policy_number;
+      if (args.coverage_amount) dbArgs.coverage_amount = args.coverage_amount;
+      const { data, error } = await supabase.from("insurance_policies").insert([dbArgs]).select().single();
       if (error) throw error;
       return { content: [{ type: "text", text: `Insurance policy logged: ${JSON.stringify(data)}` }] };
     }
@@ -698,53 +670,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // LIVE STREAMING
     if (name === "create_live_stream") {
       let meetingId = "mock-meeting-" + Math.floor(Math.random() * 1000000);
-      const API_KEY = process.env.VIDEOSDK_API_KEY;
-      const SECRET = process.env.VIDEOSDK_SECRET;
-
-      if (API_KEY && SECRET) {
-        // Generate Token
-        const options = { expiresIn: '120m', algorithm: 'HS256' };
-        const payload = { apikey: API_KEY, permissions: ['allow_join', 'allow_mod'] };
-        const token = jwt.sign(payload, SECRET, options);
-
-        // Fetch Meeting ID
-        const res = await fetch(`https://api.videosdk.live/v2/rooms`, {
-          method: "POST",
-          headers: { Authorization: token, "Content-Type": "application/json" }
-        });
-        if (res.ok) {
-          const roomData = await res.json();
-          meetingId = roomData.roomId;
-          
-          // Auto-start HLS Broadcast with Custom Template
-          try {
-            const templateUrl = process.env.VIDEOSDK_TEMPLATE_URL || "https://mcp.legendcfs.com/index.html";
-            const hlsRes = await fetch("https://api.videosdk.live/v2/hls/start", {
-              method: "POST",
-              headers: { Authorization: token, "Content-Type": "application/json" },
-              body: JSON.stringify({
-                roomId: meetingId,
-                templateUrl: templateUrl,
-                config: {
-                  orientation: "landscape",
-                  quality: "high"
-                }
-              })
-            });
-            if (!hlsRes.ok) {
-               console.warn("VideoSDK HLS Start Warning:", await hlsRes.text());
-            }
-          } catch(e) {
-            console.warn("VideoSDK HLS Start Error:", e);
-          }
-          
-        } else {
-          console.warn("VideoSDK API returned error, falling back to mock meeting ID", await res.text());
+      const token = getVideoSDKToken();
+      if (token) {
+        const roomId = await createVideoSDKRoom(token);
+        if (roomId) {
+          meetingId = roomId;
+          await startVideoSDKHLS(token, meetingId);
         }
       }
 
       const streamUrl = `https://legendcfs.com/stream/${meetingId}`;
-
       const { data, error } = await supabase.from("live_streams").insert([{
         event_id: args.event_id,
         videosdk_meeting_id: meetingId,
@@ -759,14 +694,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 
     if (name === "send_pubsub_message") {
-      const API_KEY = process.env.VIDEOSDK_API_KEY;
-      const SECRET = process.env.VIDEOSDK_SECRET;
-      
-      if (!API_KEY || !SECRET) throw new Error("Missing VideoSDK credentials");
-      
-      const options = { expiresIn: '120m', algorithm: 'HS256' };
-      const payload = { apikey: API_KEY, permissions: ['allow_join', 'allow_mod'] };
-      const token = jwt.sign(payload, SECRET, options);
+      const token = getVideoSDKToken();
+      if (!token) throw new Error("Missing VideoSDK credentials");
       
       const res = await fetch(`https://api.videosdk.live/v2/rooms/${args.meeting_id}/pubsub`, {
         method: "POST",
@@ -780,21 +709,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       
       if (!res.ok) throw new Error(`VideoSDK PubSub API failed: ${await res.text()}`);
       return { content: [{ type: "text", text: `PubSub message sent to meeting ${args.meeting_id} on topic ${args.topic}` }] };
-    }
-
-    if (name === "fetch_stream_summary") {
-      // In a real scenario, we would hit the VideoSDK transcription fetch endpoint.
-      // For this implementation, we will log the request and simulate a fetch.
-      const summaryText = "Simulated transcription summary for " + args.meeting_id;
-      
-      const { data, error } = await supabase.from("stream_transcripts").insert([{
-        stream_id: args.meeting_id,
-        summary: summaryText,
-        raw_text_url: `https://api.videosdk.live/v2/transcriptions/${args.meeting_id}/file`
-      }]).select().single();
-      
-      if (error) throw error;
-      return { content: [{ type: "text", text: `Stream summary fetched and logged: ${JSON.stringify(data)}` }] };
     }
 
     if (name === "query_whitepages") {
@@ -827,24 +741,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return { content: [{ type: "text", text: JSON.stringify(cleanedMatches) }] };
     }
 
-    if (name === "send_email") {
-      const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST || "smtp.resend.com",
-        port: parseInt(process.env.SMTP_PORT || "465"),
-        secure: true, // Use TLS
-        auth: {
-          user: process.env.SMTP_USER || "resend",
-          pass: process.env.SMTP_PASS
-        }
-      });
-      const info = await transporter.sendMail({
-        from: process.env.EMAIL_FROM || "crm@legendcfs.com",
-        to: args.to,
-        subject: args.subject,
-        text: args.body
-      });
-      return { content: [{ type: "text", text: `Email sent successfully: ${info.messageId}` }] };
-    }
 
 
     throw new Error(`Unknown tool: ${name}`);
@@ -868,7 +764,7 @@ async function run() {
   if (!isHTTP) {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("LegendCFS MCP Server (1.1.0) running on stdio");
+    console.error("LegendCFS MCP Server (2.0.0) running on stdio");
     return;
   }
 
@@ -877,9 +773,23 @@ async function run() {
   app.use(cors());
   app.use(express.static("public"));
 
+  // Bearer token auth middleware for MCP endpoints
+  const requireAuth = (req, res, next) => {
+    if (!MCP_AUTH_TOKEN) {
+      // If no token is configured, allow access (dev mode)
+      console.warn("WARNING: MCP_AUTH_TOKEN not set — endpoints are unauthenticated!");
+      return next();
+    }
+    const authHeader = req.headers.authorization;
+    if (!authHeader || authHeader !== `Bearer ${MCP_AUTH_TOKEN}`) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+  };
+
   const transports = new Map();
 
-  app.get("/sse", async (req, res) => {
+  app.get("/sse", requireAuth, async (req, res) => {
     console.log("New SSE connection...");
     const transport = new SSEServerTransport("/message", res);
     transports.set(transport.sessionId, transport);
@@ -892,7 +802,7 @@ async function run() {
     });
   });
 
-  app.post("/message", async (req, res) => {
+  app.post("/message", requireAuth, async (req, res) => {
     const sessionId = req.query.sessionId;
     const transport = transports.get(sessionId);
     if (transport) {

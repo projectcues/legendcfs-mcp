@@ -1,18 +1,71 @@
 # LegendCFS MCP Server
 
-This is the Model Context Protocol (MCP) server for the LegendCFS Agentic CRM. It acts as the bridge between Pickaxe Agents and the Supabase PostgreSQL backend.
+Model Context Protocol (MCP) server powering the LegendCFS agentic CRM for Advanced Planning Services.
 
-## Overview
-By running this MCP server, any MCP-compliant platform (like Pickaxe, Claude Desktop, or Cursor) can instantly interact with the LegendCFS ecosystem without needing to manually map dozens of REST API endpoints.
+## Architecture
 
-## Features
-Exposes 15 standard MCP Tools covering the entire deathcare ecosystem:
-1. **Intake & Logistics:** `create_lead`, `create_case`, `update_case_status`, `get_case_status`
-2. **Arrangements & Content:** `schedule_event`, `get_events`, `add_merchandise`, `publish_obituary`, `extract_family_tree`, `get_family_tree`
-3. **Compliance & Finance:** `check_signature_status`, `draft_invoice`, `verify_insurance_policy`
-4. **Marketplace & Ecosystem:** `find_vendor`, `log_vendor_referral`
+- **Runtime:** Node.js + Express
+- **Transport:** Auto-detects stdio (local dev) or SSE over HTTP (Hostinger/production)
+- **Database:** Supabase (PostgreSQL)
+- **Integrations:** Whitepages Pro API, VideoSDK (live streaming)
+- **Deployment:** Hostinger Node.js hosting with Passenger (auto-deploys from `main` branch)
+
+## Tools (24)
+
+### Intake & Logistics
+| Tool | Description |
+|---|---|
+| `create_lead` | Creates a new CRM lead |
+| `link_leads` | Links two leads with a relationship |
+| `get_lead_network` | Gets all relationships for a lead |
+| `update_lead` | Updates lead contact info, status, address, and history |
+| `update_agent_profile` | Updates a human agent's profile |
+| `get_available_leads` | Retrieves unassigned leads |
+| `create_case` | Creates a funeral case |
+| `update_case_status` | Updates case status |
+
+### Arrangements & Content
+| Tool | Description |
+|---|---|
+| `get_case_status` | Gets current case status |
+| `schedule_event` | Schedules a service event (auto-provisions livestream if needed) |
+| `get_events` | Lists events for a case |
+| `add_merchandise` | Adds merchandise to a case |
+| `publish_obituary` | Publishes an obituary |
+| `extract_family_tree` | Logs a family member |
+| `get_family_tree` | Gets all family members for a lead |
+
+### Compliance & Finance
+| Tool | Description |
+|---|---|
+| `check_signature_status` | Checks authorization signature status |
+| `draft_invoice` | Creates an invoice draft |
+| `verify_insurance_policy` | Logs an insurance policy |
+
+### Marketplace
+| Tool | Description |
+|---|---|
+| `find_vendor` | Finds vendors by category |
+| `log_vendor_referral` | Logs a vendor referral |
+
+### Live Streaming
+| Tool | Description |
+|---|---|
+| `create_live_stream` | Creates a VideoSDK live stream |
+| `register_stream_attendee` | Registers a stream viewer as a lead |
+| `send_pubsub_message` | Sends a real-time message to a stream |
+
+### Intelligence
+| Tool | Description |
+|---|---|
+| `query_whitepages` | Queries Whitepages for background info (cleaned payload) |
 
 ## Setup
-1. `npm install`
-2. Create a `.env` file with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
-3. Run the server using an MCP client (stdio).
+
+1. Copy `.env.example` to `.env` and fill in your keys
+2. `npm install`
+3. `node index.js` (stdio mode) or set `PORT=3000` for HTTP/SSE mode
+
+## Security
+
+Set `MCP_AUTH_TOKEN` in production. The `/sse` and `/message` endpoints require `Authorization: Bearer <token>`.
